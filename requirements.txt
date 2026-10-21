@@ -1,0 +1,10 @@
+transformers
+huggingface_hub
+soundfile
+safetensors
+pandas
+numpy
+matplotlib
+psutil
+torch
+torchaudio
