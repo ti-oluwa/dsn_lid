@@ -27,26 +27,64 @@ REQUIRED_COLUMNS = ("id", "path", "label", "duration")
 
 
 def load_manifest(data_directory: Path, split: str) -> pandas.DataFrame:
-    """Read `<split>.csv` and add the columns the pipeline relies on.
+    """Read CSV manifests or extract embedded audio from Parquet shards.
 
     :param data_directory: Folder containing the downloaded dataset.
     :param split: Either "train" or "validation".
     :returns: The manifest with an integer `label_index` column and an absolute `audio_path` column.
     :raises ValueError: If a required column is missing or a label is not one of the 13 classes.
     """
-    manifest = pandas.read_csv(data_directory / f"{split}.csv")
+    if split not in {"train", "validation"}:
+        raise ValueError("split must be 'train' or 'validation'")
+
+    csv_path = data_directory / f"{split}.csv"
+    parquet_paths = sorted(
+        set(data_directory.glob(f"{split}-*.parquet"))
+        | set(data_directory.glob(f"data/{split}-*.parquet"))
+    )
+    if csv_path.exists():
+        manifest = pandas.read_csv(csv_path)
+    elif parquet_paths:
+        manifest_parts = []
+        audio_directory = data_directory / "audio" / split
+        audio_directory.mkdir(parents=True, exist_ok=True)
+        for shard_index, parquet_path in enumerate(parquet_paths):
+            shard = pandas.read_parquet(parquet_path)
+            if "audio" not in shard.columns:
+                raise ValueError(f"{parquet_path.name} is missing the audio column")
+
+            audio_paths = []
+            for row_index, audio in enumerate(shard.pop("audio")):
+                audio_bytes = audio.get("bytes") if isinstance(audio, dict) else None
+                if not isinstance(audio_bytes, (bytes, bytearray, memoryview)):
+                    raise TypeError(
+                        f"{parquet_path.name} row {row_index} has no embedded audio bytes"
+                    )
+                audio_path = audio_directory / f"{shard_index:05d}-{row_index:06d}.flac"
+                if not audio_path.exists():
+                    audio_path.write_bytes(audio_bytes)
+                audio_paths.append(str(audio_path.relative_to(data_directory)))
+
+            shard["path"] = audio_paths
+            manifest_parts.append(shard)
+        manifest = pandas.concat(manifest_parts, ignore_index=True)
+    else:
+        raise FileNotFoundError(
+            f"No {split}.csv or {split}-*.parquet files found in {data_directory}"
+        )
+
     missing_columns = [
         column for column in REQUIRED_COLUMNS if column not in manifest.columns
     ]
     if missing_columns:
-        raise ValueError(f"{split}.csv is missing columns: {missing_columns}")
+        raise ValueError(f"{split} manifest is missing columns: {missing_columns}")
 
     manifest["label_index"] = manifest["label"].map(LABEL_TO_ID)
     if manifest["label_index"].isna().any():
         unknown_labels = sorted(
             manifest.loc[manifest["label_index"].isna(), "label"].unique()
         )
-        raise ValueError(f"{split}.csv has unknown labels: {unknown_labels}")
+        raise ValueError(f"{split} manifest has unknown labels: {unknown_labels}")
 
     manifest["label_index"] = manifest["label_index"].astype(int)
     manifest["audio_path"] = manifest["path"].map(

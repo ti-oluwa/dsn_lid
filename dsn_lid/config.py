@@ -110,7 +110,7 @@ class TrainingConfig:
     encoder_learning_rate: float = 4e-5
     """Learning rate for the pretrained encoder layers."""
 
-    head_learning_rate: float = 1e-3
+    head_learning_rate: float = 5e-4
     """Learning rate for the layer weights, projector and classifier."""
 
     weight_decay: float = 0.01

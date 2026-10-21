@@ -57,7 +57,7 @@ class Workspace:
 
         workspace = cls(
             data_directory=scratch_directory / "data",
-            checkpoint_directory=scratch_directory / "checkpoints",
+            checkpoint_directory=output_directory / "checkpoints",
             export_directory=output_directory / "export",
             output_directory=output_directory,
         )

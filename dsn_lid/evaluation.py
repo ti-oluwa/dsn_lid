@@ -46,8 +46,11 @@ def predict_logits(
             for position in positions
         ]
         input_values, attention_mask = extract_features(feature_extractor, waveforms)
+        use_bfloat16 = device.type == "cuda" and torch.cuda.is_bf16_supported()
         with torch.autocast(
-            device_type=device.type, dtype=torch.float16, enabled=device.type == "cuda"
+            device_type=device.type,
+            dtype=torch.bfloat16 if use_bfloat16 else torch.float16,
+            enabled=device.type == "cuda",
         ):
             batch_logits = model(
                 input_values=input_values.to(device),

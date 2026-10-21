@@ -35,8 +35,14 @@ def initialise_missing_mask_embedding(
     :param model: Freshly loaded classifier.
     :param missing_keys: Parameter names the checkpoint lacked, from `output_loading_info`.
     """
-    if any("masked_spec_embed" in key for key in missing_keys):
-        torch.nn.init.uniform_(model.base_model.masked_spec_embed)
+    mask_embedding = getattr(model.base_model, "masked_spec_embed", None)
+    if mask_embedding is None:
+        return
+    missing_mask_embedding = any(
+        key.endswith("masked_spec_embed") for key in missing_keys
+    )
+    if missing_mask_embedding or not torch.isfinite(mask_embedding).all():
+        torch.nn.init.uniform_(mask_embedding)
 
 
 def build_model(config: ModelConfig) -> PreTrainedModel:

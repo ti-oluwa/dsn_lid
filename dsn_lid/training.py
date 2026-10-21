@@ -62,6 +62,11 @@ class Trainer:
         self.augmenter = augmenter
         self.device = device
         self.use_mixed_precision = device.type == "cuda"
+        self.autocast_dtype = (
+            torch.bfloat16
+            if self.use_mixed_precision and torch.cuda.is_bf16_supported()
+            else torch.float16
+        )
         self.last_checkpoint_path = checkpoint_directory / f"{run_name}_last.pt"
         self.best_weights_path = checkpoint_directory / f"{run_name}_best.pt"
 
@@ -98,9 +103,10 @@ class Trainer:
             num_warmup_steps=int(config.warmup_fraction * config.total_steps),
             num_training_steps=config.total_steps,
         )
-        grad_scaler = torch.amp.GradScaler(
-            self.device.type, enabled=self.use_mixed_precision
+        use_grad_scaler = (
+            self.use_mixed_precision and self.autocast_dtype == torch.float16
         )
+        grad_scaler = torch.amp.GradScaler(self.device.type, enabled=use_grad_scaler)
         criterion = torch.nn.CrossEntropyLoss(label_smoothing=config.label_smoothing)
 
         completed_steps, best_f1, history = 0, None, []
@@ -208,22 +214,35 @@ class Trainer:
             batch = next(batches)
             with torch.autocast(
                 device_type=self.device.type,
-                dtype=torch.float16,
+                dtype=self.autocast_dtype,
                 enabled=self.use_mixed_precision,
             ):
                 logits = self.model(
                     input_values=batch.input_values.to(self.device),
                     attention_mask=batch.attention_mask.to(self.device),
                 ).logits
+            if not torch.isfinite(logits).all():
+                raise FloatingPointError(
+                    "Model produced non-finite logits; check the loaded model weights, "
+                    "audio inputs, and Kaggle package version."
+                )
             loss = (
                 criterion(logits.float(), batch.labels.to(self.device)) / accumulation
             )
+            if not torch.isfinite(loss):
+                raise FloatingPointError(
+                    "Training loss became non-finite before backpropagation."
+                )
             grad_scaler.scale(loss).backward()
             step_loss += loss.item()
         grad_scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(
-            self.model.parameters(), self.config.max_gradient_norm
+        gradient_norm = torch.nn.utils.clip_grad_norm_(
+            self.model.parameters(),
+            self.config.max_gradient_norm,
+            error_if_nonfinite=False,
         )
+        if not torch.isfinite(gradient_norm) and not grad_scaler.is_enabled():
+            raise FloatingPointError("Gradient norm became non-finite.")
         grad_scaler.step(optimizer)
         grad_scaler.update()
         return step_loss

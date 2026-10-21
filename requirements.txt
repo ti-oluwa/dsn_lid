@@ -3,6 +3,7 @@ huggingface_hub
 soundfile
 safetensors
 pandas
+pyarrow
 numpy
 matplotlib
 psutil
